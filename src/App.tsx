@@ -1,99 +1,157 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import './App.css';
 
+import { SCHEMA_INRUPT, RDF, AS } from '@inrupt/vocab-common-rdf';
+
 import {
-  LoginButton,
-  LogoutButton,
-  useSession,
-  CombinedDataProvider,
-  Text,
-} from '@inrupt/solid-ui-react';
+  login,
+  handleIncomingRedirect,
+  getDefaultSession,
+  fetch,
+  Session,
+} from '@inrupt/solid-client-authn-browser';
 
 import {
   getPodUrlAll,
   getSolidDataset,
   getThing,
-  getUrlAll,
+  createSolidDataset,
+  saveSolidDatasetAt,
+  createThing,
+  addUrl,
+  addStringNoLocale,
+  setThing,
+  getStringNoLocale,
 } from '@inrupt/solid-client';
-import { getOrCreateDataset } from './utils';
 
 function App() {
-  const { session } = useSession();
+  const [session, setSession] = useState<Session | null>(null);
+  const [profileUrl, setProfileUrl] = useState<string | null>(null);
+  const [profile, setProfile] = useState<any | null>(null);
+
+  const [name, setName] = useState<string>('');
+  const [email, setEmail] = useState<string>('');
 
   useEffect(() => {
-    if (!session) return;
-
     const exec = async () => {
-      const profileDataset = await getSolidDataset(session.info.webId!, {
-        fetch: session.fetch,
-      });
+      await handleIncomingRedirect();
 
-      console.log(profileDataset);
-
-      const profileThing = getThing(profileDataset, session.info.webId!);
-
-      console.log(profileThing);
-
-      const podsUrls = getUrlAll(
-        profileThing!,
-        'http://www.w3.org/ns/pim/space#storage'
-      );
-
-      console.log(podsUrls);
-
-      const pod = podsUrls[0];
-      const containerUri = `${pod}todos`;
-      const list = await getOrCreateDataset(containerUri, session.fetch);
-
-      console.log('LIST');
-      console.log(list);
-
-      const profile = await getOrCreateDataset(`${pod}profile`, session.fetch);
-
-      console.log('PROFILE');
-      console.log(profile);
-
-      // const result = await getPodUrlAll(session.info.webId!, {
-      //   fetch: session.fetch,
-      // });
-
-      // console.log(JSON.stringify(result, null, 2));
+      const session = getDefaultSession();
+      setSession({ ...session } as Session);
     };
 
     exec();
-  }, [session]);
+  }, []);
 
-  if (session.info.isLoggedIn) {
+  useEffect(() => {
+    getItems();
+  }, [profile]);
+
+  const handleLogin = async () => {
+    return login({
+      oidcIssuer: 'https://login.inrupt.com',
+      redirectUrl: new URL('/', window.location.href).toString(),
+      clientName: 'UFABC - Solid App',
+    });
+  };
+
+  const handleConnect = async () => {
+    const mypods = await getPodUrlAll(session!.info.webId!, { fetch: fetch });
+
+    const profileUrl = `${mypods[0]}customProfile`;
+    setProfileUrl(profileUrl);
+
+    try {
+      const profile = await getSolidDataset(profileUrl, { fetch: fetch });
+      setProfile(profile);
+    } catch (error: any) {
+      console.log(error);
+
+      if (typeof error.statusCode === 'number' && error.statusCode === 404) {
+        const newProfile = createSolidDataset();
+
+        await saveSolidDatasetAt(profileUrl, newProfile, { fetch: fetch });
+
+        const profile = await getSolidDataset(profileUrl, { fetch: fetch });
+        setProfile(profile);
+      }
+    }
+  };
+
+  const handleSave = async () => {
+    let profileName = createThing({ name: 'User Name' });
+    profileName = addUrl(profileName, RDF.type, AS.Article);
+    profileName = addStringNoLocale(profileName, SCHEMA_INRUPT.name, name);
+    let newProfile = setThing(profile, profileName);
+
+    let profileEmail = createThing({ name: 'User Email' });
+    profileEmail = addUrl(profileEmail, RDF.type, AS.Article);
+    profileEmail = addStringNoLocale(profileEmail, SCHEMA_INRUPT.email, email);
+    newProfile = setThing(newProfile, profileEmail);
+
+    await saveSolidDatasetAt(profileUrl!, newProfile, { fetch: fetch });
+
+    window.alert('Saved!');
+  };
+
+  const getItems = async () => {
+    const nameThing = getThing(profile!, `${profileUrl}#User%20Name`);
+    const emailThing = getThing(profile!, `${profileUrl}#User%20Email`);
+
+    const savedName = getStringNoLocale(nameThing!, SCHEMA_INRUPT.name);
+    const savedEmail = getStringNoLocale(emailThing!, SCHEMA_INRUPT.email);
+
+    setName(savedName ?? '');
+    setEmail(savedEmail ?? '');
+  };
+
+  if (!session || !session.info.isLoggedIn) {
     return (
-      <CombinedDataProvider
-        // datasetUrl={session.info.webId!}
-        // thingUrl={session.info.webId!}
-        datasetUrl="https://storage.inrupt.com/dca57eb0-c90b-4b30-a681-c1318e85cd52/"
-        thingUrl="https://storage.inrupt.com/dca57eb0-c90b-4b30-a681-c1318e85cd52/profile"
-      >
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <span>Você está logado como:</span>
-          <Text
-            properties={[
-              'http://www.w3.org/2006/vcard/ns#fn',
-              'http://xmlns.com/foaf/0.1/name',
-            ]}
-          />
-          <div style={{ marginTop: 32 }}>
-            <LogoutButton />
-          </div>
-        </div>
-      </CombinedDataProvider>
+      <>
+        <button onClick={() => handleLogin()}>Login</button>
+      </>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <>
+        <button onClick={handleConnect}>Connect to Pod</button>
+      </>
     );
   }
 
   return (
     <>
-      <LoginButton
-        oidcIssuer="https://login.inrupt.com/"
-        redirectUrl={window.location.href}
-        authOptions={{ clientName: 'UFABC SOLID Demo' }}
-      />
+      <h1>UFABC Solid Demo</h1>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+          justifyContent: 'center',
+        }}
+      >
+        <div style={{ display: 'flex', gap: 8 }}>
+          <span>Name:</span>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <span>Email:</span>
+          <input
+            type="text"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
+      </div>
+      <button onClick={handleSave} style={{ margin: 16, width: '100%' }}>
+        Save
+      </button>
     </>
   );
 }
